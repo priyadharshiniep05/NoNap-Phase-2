@@ -1,0 +1,58 @@
+# Environments
+.venv/
+venv/
+ENV/
+env/
+model/.venv/
+server/.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Databases & local data
+*.db
+*.sqlite3
+server/data/*.db
+!server/data/.gitkeep
+
+# Checkpoints and weights
+model/checkpoints/
+model/weights/
+*.pt
+*.pth
+*.onnx
+
+# Flutter / Dart / Mobile
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+app/build/
+app/.dart_tool/
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/app.framework
+app/ios/Pods/
+app/.packages
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables
+.env
+pi-client/config.env
