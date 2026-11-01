@@ -1,0 +1,20 @@
+# systemd unit for the NoNap Pi client. install.sh fills in __USER__ and __DIR__
+# and copies this to /etc/systemd/system/nonap-pi.service.
+[Unit]
+Description=NoNap driver drowsiness camera client
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+User=__USER__
+SupplementaryGroups=video audio gpio
+WorkingDirectory=__DIR__
+ExecStart=/usr/bin/python3 -u __DIR__/nonap_pi.py --config __DIR__/config.ini
+Restart=always
+RestartSec=3
+# Ethernet may come up a little after boot; the client retries with backoff anyway.
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+# systemd unit for the NoNap camera streamer (camera only, no alerts on the Pi).
+# The streamer and its config live on the SD card's boot partition (/boot/nonap),
+# so they can be edited from the Mac by putting the card in the card reader.
+# Runs as root because /boot is a root-owned FAT partition (for the log file).
+[Unit]
+Description=NoNap camera streamer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /boot/nonap/camera_stream.py --config /boot/nonap/config.ini --log /boot/nonap/stream.log
+Restart=always
+# Long enough that a crash loop cannot starve a Pi 1
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
