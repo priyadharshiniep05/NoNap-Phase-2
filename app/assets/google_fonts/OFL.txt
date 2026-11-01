@@ -1,0 +1,2 @@
+Inter and Space Grotesk are licensed under the SIL Open Font License, Version 1.1.
+https://openfontlicense.org — bundled so NoNap renders correctly without internet access.
