@@ -11,6 +11,8 @@ from server.app.db.ops_db import get_ops_session
 from server.app.db.models_auth import User
 from server.app.db.models_ops import AlertLog
 from server.app.services.alert_service import create_and_broadcast_alert
+from server.app.services.alerting_service import alerting_service
+from server.app.services.driver_context import manager_fleet_id
 from server.app.schemas.ops import AlertLogResponse, AlertAcknowledgeRequest
 
 router = APIRouter(prefix="/alerts", tags=["Alerts & Accidents"])
@@ -45,26 +47,11 @@ async def report_accident_sos(
         source="webcam",
     )
 
-    return AlertLogResponse(
-        id=alert.id,
-        driver_id=alert.driver_id,
-        driver_name=current_user.full_name,
-        fleet_id=alert.fleet_id,
-        type=alert.type,
-        severity=alert.severity,
-        confidence=alert.confidence,
-        ear=alert.ear,
-        mar=alert.mar,
-        perclos=alert.perclos,
-        source=alert.source,
-        detected_at=alert.detected_at,
-        acknowledged=alert.acknowledged,
-        acknowledged_by=alert.acknowledged_by,
-    )
+    return AlertLogResponse.from_row(alert, current_user.full_name)
 
 
 @router.post("/{alert_id}/acknowledge", response_model=AlertLogResponse)
-def acknowledge_alert(
+async def acknowledge_alert(
     alert_id: str,
     payload: AlertAcknowledgeRequest,
     current_user: User = Depends(get_current_user),
@@ -76,28 +63,25 @@ def acknowledge_alert(
     if not alert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found.")
 
-    ack_name = payload.acknowledged_by or current_user.full_name
-    alert.acknowledged = True
-    alert.acknowledged_by = ack_name
-    ops_db.commit()
-    ops_db.refresh(alert)
-
     driver = auth_db.query(User).filter(User.id == alert.driver_id).first()
     driver_name = driver.full_name if driver else "Driver"
 
-    return AlertLogResponse(
-        id=alert.id,
-        driver_id=alert.driver_id,
-        driver_name=driver_name,
-        fleet_id=alert.fleet_id,
-        type=alert.type,
-        severity=alert.severity,
-        confidence=alert.confidence,
-        ear=alert.ear,
-        mar=alert.mar,
-        perclos=alert.perclos,
-        source=alert.source,
-        detected_at=alert.detected_at,
-        acknowledged=alert.acknowledged,
-        acknowledged_by=alert.acknowledged_by,
-    )
+    # Only the driver themself, or the manager of the driver's fleet, may acknowledge.
+    allowed = current_user.id == alert.driver_id
+    if not allowed and current_user.role == "fleet_manager":
+        fleet_id = manager_fleet_id(auth_db, current_user.id)
+        allowed = fleet_id is not None and fleet_id == alert.fleet_id
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found.")
+
+    if alert.level is not None:
+        # Level-based alerts go through the alerting service (Pi stop, WS push, timing)
+        by = None if current_user.id == alert.driver_id else current_user.full_name
+        alert = await alerting_service.acknowledge(ops_db, alert, driver_name, acknowledged_by=by)
+        return AlertLogResponse.from_row(alert, driver_name)
+
+    alert.acknowledged = True
+    alert.acknowledged_by = payload.acknowledged_by or current_user.full_name
+    ops_db.commit()
+    ops_db.refresh(alert)
+    return AlertLogResponse.from_row(alert, driver_name)

@@ -49,6 +49,16 @@ class AlertLog(OpsBase):
     acknowledged = Column(Boolean, default=False)
     acknowledged_by = Column(String, nullable=True)
 
+    # Level-based alerting (migration 0001_alert_levels)
+    level = Column(Integer, nullable=True)  # 1-3; NULL for legacy / SOS rows
+    status = Column(String, nullable=True)  # active | acknowledged | unacknowledged | resolved
+    reason = Column(String, nullable=True)  # eyes_closed | yawn | repeated_l1
+    acknowledged_at = Column(DateTime, nullable=True)
+    response_time_ms = Column(Float, nullable=True)
+    escalated_at = Column(DateTime, nullable=True)
+    device_id = Column(String, nullable=True)
+    frame_id = Column(String, nullable=True)
+
 
 class SessionStat(OpsBase):
     __tablename__ = "session_stats"
@@ -59,3 +69,21 @@ class SessionStat(OpsBase):
     ended_at = Column(DateTime, nullable=True)
     frames_processed = Column(Integer, default=0)
     alert_count = Column(Integer, default=0)
+
+
+class Device(OpsBase):
+    """A capture device (Raspberry Pi) bound to a driver. Liveness comes from heartbeats and frames."""
+
+    __tablename__ = "devices"
+
+    id = Column(String, primary_key=True)  # device_id from pi_client/config.ini
+    driver_id = Column(String, nullable=True, index=True)
+    vehicle = Column(String, nullable=True)
+    ip = Column(String, nullable=True)
+    camera_backend = Column(String, nullable=True)
+    fps = Column(Float, nullable=True)
+    cpu_temp_c = Column(Float, nullable=True)
+    uptime_s = Column(Float, nullable=True)
+    rtt_ms = Column(Float, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)  # UTC
+    created_at = Column(DateTime, default=_utcnow)

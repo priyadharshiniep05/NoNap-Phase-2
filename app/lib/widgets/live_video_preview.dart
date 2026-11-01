@@ -1,107 +1,100 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../providers/auth_provider.dart';
-import '../theme/app_colors.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 
+import '../providers/auth_provider.dart';
+import '../theme/tokens.dart';
+import '../theme/typography.dart';
+
+/// What the camera sees (Pi or MacBook webcam), refreshed ~3 times a second.
+/// Frames are only held in the server's memory; nothing is recorded.
 class LiveVideoPreview extends ConsumerStatefulWidget {
-  const LiveVideoPreview({super.key});
+  final String source; // pi | webcam
+  const LiveVideoPreview({super.key, required this.source});
 
   @override
   ConsumerState<LiveVideoPreview> createState() => _LiveVideoPreviewState();
 }
 
 class _LiveVideoPreviewState extends ConsumerState<LiveVideoPreview> {
-  Timer? _refreshTimer;
-  int _counter = 0;
+  Timer? _timer;
+  int _n = 0;
 
   @override
   void initState() {
     super.initState();
-    // Refresh preview frame at 3 fps for smooth responsive mobile feed
-    _refreshTimer = Timer.periodic(const Duration(milliseconds: 330), (_) {
-      if (mounted) {
-        setState(() {
-          _counter++;
-        });
-      }
+    _timer = Timer.periodic(const Duration(milliseconds: 330), (_) {
+      if (mounted) setState(() => _n++);
     });
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final api = ref.watch(apiServiceProvider);
-    final previewUrl = '${api.baseUrl}/monitor/preview?t=$_counter';
-
-    return Container(
-      height: 200,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Image.network(
-              previewUrl,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              errorBuilder: (context, error, stackTrace) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
-                      Icon(Icons.videocam_off_rounded, color: AppColors.textMuted, size: 36),
-                      SizedBox(height: 8),
-                      Text(
-                        'Webcam feed connecting...',
-                        style: TextStyle(color: AppColors.textMuted, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                );
-              },
+    final isPi = widget.source == 'pi';
+    return ClipRRect(
+      borderRadius: AppRadii.cardR,
+      child: AspectRatio(
+        aspectRatio: 4 / 3,
+        child: Stack(fit: StackFit.expand, children: [
+          const ColoredBox(color: Colors.black),
+          Image.network(
+            '${api.baseUrl}/monitor/preview?t=$_n',
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(PhosphorIconsRegular.cameraSlash, color: AppColors.textMuted, size: 32),
+                const SizedBox(height: 8),
+                Text('Waiting for the camera', style: AppText.caption()),
+              ]),
             ),
-            Positioned(
+          ),
+          Positioned(
+            top: 10,
+            left: 10,
+            child: _Badge(
+              icon: PhosphorIconsFill.circle,
+              iconColor: AppColors.danger,
+              text: isPi ? 'PI CAMERA' : 'MACBOOK CAM',
+            ),
+          ),
+          if (!isPi)
+            const Positioned(
               top: 10,
-              left: 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: const [
-                    CircleAvatar(radius: 4, backgroundColor: AppColors.drowsyRed),
-                    SizedBox(width: 6),
-                    Text(
-                      'LIVE MACBOOK CAM',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              right: 10,
+              child: _Badge(icon: PhosphorIconsRegular.flipHorizontal, iconColor: AppColors.primary, text: 'MIRRORED'),
             ),
-          ],
-        ),
+        ]),
       ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String text;
+  const _Badge({required this.icon, required this.iconColor, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), borderRadius: AppRadii.pillR),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 10, color: iconColor),
+        const SizedBox(width: 6),
+        Text(text, style: AppText.overline(color: AppColors.textPrimary).copyWith(fontSize: 10)),
+      ]),
     );
   }
 }

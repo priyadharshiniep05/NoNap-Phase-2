@@ -3,10 +3,16 @@
 Exports top-level predict(frame, driver_id=None) function.
 """
 
-from nonap_model.engine import predict, get_engine, DetectionEngine
-from nonap_model.preprocess import preprocess_frame
-from nonap_model.landmarks_baseline import calculate_ear, calculate_mar
-from nonap_model.temporal import DriverTemporalTracker, TemporalManager
+try:
+    from .engine import predict, get_engine, DetectionEngine
+    from .preprocess import preprocess_frame
+    from .landmarks_baseline import calculate_ear, calculate_mar
+    from .temporal import DriverTemporalTracker, TemporalManager
+except ImportError:
+    from nonap_model.engine import predict, get_engine, DetectionEngine
+    from nonap_model.preprocess import preprocess_frame
+    from nonap_model.landmarks_baseline import calculate_ear, calculate_mar
+    from nonap_model.temporal import DriverTemporalTracker, TemporalManager
 
 __all__ = [
     "predict",

@@ -16,10 +16,12 @@ echo "WebSocket URL:    ws://$IP:8000/ws"
 echo "API Docs:         http://localhost:8000/docs"
 echo ""
 echo "Demo Accounts:"
-echo "  Fleet Manager:  manager@nonap.demo / NoNap@123"
-echo "  Driver 1:       driver1@nonap.demo / NoNap@123"
-echo "  Driver 2:       driver2@nonap.demo / NoNap@123"
-echo "  Driver 3:       driver3@nonap.demo / NoNap@123"
+echo "  Fleet Manager:  manager@nonap.demo (Ananya Iyer) / NoNap@123"
+echo "  Driver 1:       driver1@nonap.demo (Priyadarshini Prasanna) / NoNap@123"
+echo "  Driver 2:       driver2@nonap.demo (Nishant Sharma [Simulated]) / NoNap@123"
+echo "  Driver 3:       driver3@nonap.demo (Namrata Rao [Simulated]) / NoNap@123"
+echo "  Driver 4:       driver4@nonap.demo (Rohan Gupta [Simulated]) / NoNap@123"
+echo "  Driver 5:       driver5@nonap.demo (Nikhil Menon [Simulated]) / NoNap@123"
 echo "=========================================================="
 
 # Activate virtualenv and run server
@@ -33,4 +35,8 @@ if [ ! -f "server/data/auth.db" ]; then
 fi
 
 echo "Starting NoNap server on 0.0.0.0:8000..."
-exec uvicorn server.app.main:app --host 0.0.0.0 --port 8000 --reload
+export VIDEO_SOURCE="${VIDEO_SOURCE:-pi}"
+echo "Frame source:     VIDEO_SOURCE=$VIDEO_SOURCE   (pi = Raspberry Pi / simulate_pi.py, webcam = MacBook webcam)"
+echo "Pi config.ini:    server_url = http://$IP:8000"
+# No --reload: a reload would drop in-flight alert state mid-demo.
+exec uvicorn server.app.main:app --host 0.0.0.0 --port 8000

@@ -45,5 +45,6 @@ def health_check(
             "ops_db": ops_status,
         },
         "backend_model": settings.DETECTOR_BACKEND,
+        "video_source": settings.VIDEO_SOURCE,
         "timestamp": time.time(),
     }

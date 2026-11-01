@@ -1,130 +1,113 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
+
+import '../../core/ist.dart';
+import '../../models/fleet_overview.dart';
 import '../../providers/fleet_provider.dart';
-import '../../theme/app_colors.dart';
-import '../../widgets/alert_tile.dart';
+import '../../theme/tokens.dart';
+import '../../theme/typography.dart';
+import '../../widgets/alert_timeline.dart';
+import '../../widgets/ui.dart';
+import 'fleet_dashboard_screen.dart' show statusColor, statusLabel;
 
 class FleetDriverDetailScreen extends ConsumerWidget {
   final String driverId;
-
   const FleetDriverDetailScreen({super.key, required this.driverId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final fleetData = ref.watch(fleetDataProvider);
-    final overview = fleetData.overview;
-    final driver = overview?.drivers.firstWhere(
-      (d) => d.driverId == driverId,
-      orElse: () => overview.drivers.first,
-    );
+    final fleet = ref.watch(fleetDataProvider);
+    final timeline = ref.watch(fleetDriverAlertsProvider(driverId));
+    FleetDriverItem? d;
+    for (final x in fleet.overview?.drivers ?? const <FleetDriverItem>[]) {
+      if (x.driverId == driverId) d = x;
+    }
 
-    final driverAlerts = fleetData.alerts.where((a) => a.driverId == driverId).toList();
+    // Live alerts from the feed take precedence over the fetched copy.
+    final live = {for (final a in fleet.alerts.where((a) => a.driverId == driverId)) a.id: a};
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(driver?.fullName ?? 'Driver Detail'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Driver Profile Header Card
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.border),
+      appBar: AppBar(title: Text(d?.displayName ?? 'Driver')),
+      body: PageBackground(
+        child: RefreshIndicator(
+          color: AppColors.primary,
+          backgroundColor: AppColors.surface,
+          onRefresh: () async => ref.invalidate(fleetDriverAlertsProvider(driverId)),
+          child: ListView(padding: const EdgeInsets.fromLTRB(AppSpace.gutter, AppSpace.s, AppSpace.gutter, AppSpace.xxxl), children: [
+            if (d == null)
+              const Skeleton(height: 120)
+            else
+              GlassCard(
+                glow: d.inActiveAlert ? AppColors.danger : null,
+                borderColor: d.inActiveAlert ? AppColors.danger : AppColors.border,
+                child: Row(children: [
+                  InitialsAvatar(name: d.fullName, size: 60, ring: statusColor(d)),
+                  const SizedBox(width: AppSpace.l),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(d.displayName, style: AppText.title()),
+                      Text(d.vehicle ?? 'No vehicle assigned', style: AppText.caption()),
+                      const SizedBox(height: AppSpace.s),
+                      Row(children: [
+                        StatusDot(color: statusColor(d), pulse: d.online),
+                        const SizedBox(width: 6),
+                        Text(statusLabel(d), style: AppText.caption(color: statusColor(d)).copyWith(fontWeight: FontWeight.w700)),
+                      ]),
+                    ]),
+                  ),
+                ]),
               ),
-              child: Column(
-                children: [
-                  CircleAvatar(
-                    radius: 32,
-                    backgroundColor: AppColors.cyan.withValues(alpha: 0.15),
-                    child: const Icon(Icons.person, color: AppColors.cyan, size: 36),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    driver?.fullName ?? 'Driver',
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    driver?.email ?? '',
-                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _MiniMetric(
-                        label: 'Status',
-                        value: driver?.currentStatus.toUpperCase() ?? 'OFFLINE',
-                        color: driver?.currentStatus == 'drowsy' ? AppColors.drowsyRed : AppColors.alertGreen,
-                      ),
-                      _MiniMetric(
-                        label: 'Alerts Today',
-                        value: '${driver?.alertsToday ?? 0}',
-                        color: AppColors.cyan,
-                      ),
-                      _MiniMetric(
-                        label: 'PERCLOS',
-                        value: '${((driver?.perclos ?? 0.0) * 100).toInt()}%',
-                        color: AppColors.blue,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            Text(
-              'HISTORICAL ALERTS (${driverAlerts.length})',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.0,
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            if (driverAlerts.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(32),
-                child: const Center(
-                  child: Text(
-                    'No alerts recorded for this driver.',
-                    style: TextStyle(color: AppColors.textMuted),
+            const SizedBox(height: AppSpace.m),
+            if (d != null)
+              Row(children: [
+                Expanded(child: StatTile(label: 'Alerts today', value: '${d.alertsToday}', icon: PhosphorIconsRegular.calendarBlank, color: AppColors.warning)),
+                const SizedBox(width: AppSpace.m),
+                Expanded(child: StatTile(label: 'Avg. response', value: Ist.duration(d.avgResponseMs), icon: PhosphorIconsRegular.timer)),
+                const SizedBox(width: AppSpace.m),
+                Expanded(
+                  child: StatTile(
+                    label: 'Pi camera',
+                    value: d.deviceOnline ? (d.fps != null ? '${d.fps!.toStringAsFixed(1)} fps' : 'On') : 'Off',
+                    sub: d.cpuTempC != null && d.deviceOnline ? '${d.cpuTempC!.round()}°C' : null,
+                    icon: PhosphorIconsRegular.camera,
+                    color: d.deviceOnline ? AppColors.success : AppColors.textMuted,
                   ),
                 ),
-              )
-            else
-              ...driverAlerts.map((a) => AlertTile(alert: a)),
-          ],
+              ]),
+            const SectionHeader('Timeline'),
+            timeline.when(
+              loading: () => const SkeletonList(count: 4),
+              error: (e, _) => ErrorState(
+                message: 'Could not load this driver\'s alerts.',
+                onRetry: () => ref.invalidate(fleetDriverAlertsProvider(driverId)),
+              ),
+              data: (alerts) {
+                final merged = {for (final a in alerts) a.id: a, ...live}.values.toList()
+                  ..sort((a, b) => b.detectedAt.compareTo(a.detectedAt));
+                if (merged.isEmpty) {
+                  return const EmptyState(icon: PhosphorIconsRegular.sealCheck, message: 'No alerts for this driver');
+                }
+                final rows = <Widget>[];
+                String? day;
+                for (var i = 0; i < merged.length; i++) {
+                  final label = Ist.dayLabel(merged[i].detectedAt);
+                  if (label != day) {
+                    day = label;
+                    rows.add(Padding(
+                      padding: const EdgeInsets.symmetric(vertical: AppSpace.s),
+                      child: Text(label, style: AppText.label(color: AppColors.textSecondary)),
+                    ));
+                  }
+                  final nextSameDay = i + 1 < merged.length && Ist.dayLabel(merged[i + 1].detectedAt) == label;
+                  rows.add(AlertTimelineEntry(alert: merged[i], last: !nextSameDay, driverView: false));
+                }
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows);
+              },
+            ),
+          ]),
         ),
       ),
-    );
-  }
-}
-
-class _MiniMetric extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-
-  const _MiniMetric({required this.label, required this.value, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color)),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
-      ],
     );
   }
 }

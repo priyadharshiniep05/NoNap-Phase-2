@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
+
+import '../../providers/auth_provider.dart';
 import '../../providers/fleet_provider.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/tokens.dart';
+import '../../theme/typography.dart';
+import '../../widgets/server_config_dialog.dart';
+import '../../widgets/ui.dart';
 
 class FleetSettingsScreen extends ConsumerStatefulWidget {
   const FleetSettingsScreen({super.key});
@@ -11,165 +17,92 @@ class FleetSettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _FleetSettingsScreenState extends ConsumerState<FleetSettingsScreen> {
-  double _ear = 0.22;
-  double _mar = 0.58;
-  double _perclos = 0.38;
-  double _eyesClosedSec = 1.4;
-  bool _initialized = false;
+  double? _ear;
+  double? _mar;
   bool _saving = false;
-
-  void _loadFromState(Map<String, dynamic>? thresh) {
-    if (thresh != null && !_initialized) {
-      _ear = (thresh['ear_threshold'] as num?)?.toDouble() ?? 0.22;
-      _mar = (thresh['mar_threshold'] as num?)?.toDouble() ?? 0.58;
-      _perclos = (thresh['perclos_threshold'] as num?)?.toDouble() ?? 0.38;
-      _eyesClosedSec = (thresh['eyes_closed_seconds'] as num?)?.toDouble() ?? 1.4;
-      _initialized = true;
-    }
-  }
 
   Future<void> _save() async {
     setState(() => _saving = true);
-    await ref.read(fleetDataProvider.notifier).updateThresholds({
-      'ear_threshold': _ear,
-      'mar_threshold': _mar,
-      'perclos_threshold': _perclos,
-      'eyes_closed_seconds': _eyesClosedSec,
+    final err = await ref.read(fleetDataProvider.notifier).updateThresholds({
+      if (_ear != null) 'ear_threshold': double.parse(_ear!.toStringAsFixed(3)),
+      if (_mar != null) 'mar_threshold': double.parse(_mar!.toStringAsFixed(3)),
     });
+    if (!mounted) return;
     setState(() => _saving = false);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: AppColors.alertGreen,
-          content: Text('Fleet-wide default thresholds updated!'),
-        ),
-      );
-    }
+    showToast(context, err ?? 'Fleet defaults saved', error: err != null);
   }
 
   @override
   Widget build(BuildContext context) {
-    final thresh = ref.watch(fleetDataProvider).thresholds;
-    _loadFromState(thresh);
+    final user = ref.watch(authProvider).user;
+    final t = ref.watch(fleetDataProvider).thresholds;
+    final api = ref.watch(apiServiceProvider);
+    final ear = _ear ?? (t?['ear_threshold'] as num?)?.toDouble() ?? 0.21;
+    final mar = _mar ?? (t?['mar_threshold'] as num?)?.toDouble() ?? 0.60;
+
+    Widget slider(String label, double v, double min, double max, ValueChanged<double> on) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Expanded(child: Text(label, style: AppText.label())),
+              Text(v.toStringAsFixed(2), style: AppText.metric(size: 20, color: AppColors.primary)),
+            ]),
+            Slider(value: v.clamp(min, max), min: min, max: max, divisions: ((max - min) * 100).round(), onChanged: on),
+          ],
+        );
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Fleet Thresholds'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Fleet Default Policy',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'These thresholds apply fleet-wide to any driver who has not set individual calibrations.',
-              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: 24),
-
-            _buildSlider(
-              title: 'Default EAR (Eye Closure)',
-              value: _ear,
-              min: 0.12,
-              max: 0.35,
-              divisions: 23,
-              display: _ear.toStringAsFixed(2),
-              onChanged: (v) => setState(() => _ear = v),
-            ),
-            const SizedBox(height: 16),
-
-            _buildSlider(
-              title: 'Default MAR (Yawn Openness)',
-              value: _mar,
-              min: 0.40,
-              max: 1.00,
-              divisions: 30,
-              display: _mar.toStringAsFixed(2),
-              onChanged: (v) => setState(() => _mar = v),
-            ),
-            const SizedBox(height: 16),
-
-            _buildSlider(
-              title: 'Default PERCLOS Trigger',
-              value: _perclos,
-              min: 0.20,
-              max: 0.70,
-              divisions: 25,
-              display: '${(_perclos * 100).toInt()}%',
-              onChanged: (v) => setState(() => _perclos = v),
-            ),
-            const SizedBox(height: 16),
-
-            _buildSlider(
-              title: 'Default Eyes-Closed Duration',
-              value: _eyesClosedSec,
-              min: 1.0,
-              max: 4.0,
-              divisions: 15,
-              display: '${_eyesClosedSec.toStringAsFixed(1)}s',
-              onChanged: (v) => setState(() => _eyesClosedSec = v),
-            ),
-            const SizedBox(height: 28),
-
-            ElevatedButton(
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Save Fleet Policy'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSlider({
-    required String title,
-    required double value,
-    required double min,
-    required double max,
-    required int divisions,
-    required String display,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              Text(display, style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.blue, fontSize: 14)),
-            ],
+      appBar: AppBar(title: const Text('Settings')),
+      body: PageBackground(
+        child: ListView(padding: const EdgeInsets.fromLTRB(AppSpace.gutter, AppSpace.s, AppSpace.gutter, AppSpace.xxxl), children: [
+          GlassCard(
+            child: Row(children: [
+              InitialsAvatar(name: user?.fullName ?? '?', size: 52),
+              const SizedBox(width: AppSpace.l),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(user?.fullName ?? '', style: AppText.title()),
+                  Text(user?.email ?? '', style: AppText.caption()),
+                  const SizedBox(height: 6),
+                  const Pill('Fleet manager', color: AppColors.primary),
+                ]),
+              ),
+            ]),
           ),
-          const SizedBox(height: 10),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              activeTrackColor: AppColors.blue,
-              inactiveTrackColor: AppColors.surfaceElevated,
-              thumbColor: AppColors.blue,
-            ),
-            child: Slider(
-              value: value,
-              min: min,
-              max: max,
-              divisions: divisions,
-              onChanged: onChanged,
+          const SectionHeader('Fleet default thresholds'),
+          GlassCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              slider('Eye closed below (EAR)', ear, 0.10, 0.35, (v) => setState(() => _ear = v)),
+              const SizedBox(height: AppSpace.s),
+              slider('Yawn above (MAR)', mar, 0.40, 1.20, (v) => setState(() => _mar = v)),
+              const SizedBox(height: AppSpace.s),
+              Text("Fleet-level defaults. A driver's own calibration always takes priority.", style: AppText.caption()),
+              const SizedBox(height: AppSpace.l),
+              GradientButton(label: 'Save', height: 52, loading: _saving, onPressed: (_ear == null && _mar == null) ? null : _save),
+            ]),
+          ),
+          const SectionHeader('Connection'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: ListTile(
+              leading: Icon(PhosphorIconsRegular.broadcast, color: AppColors.textSecondary),
+              title: Text('Server', style: AppText.label()),
+              subtitle: Text(api.baseUrl.isEmpty ? 'Not set' : api.baseUrl, style: AppText.caption()),
+              trailing: Icon(PhosphorIconsRegular.caretRight, color: AppColors.textMuted),
+              onTap: () async {
+                await ServerConfigDialog.show(context);
+                setState(() {});
+              },
             ),
           ),
-        ],
+          const SizedBox(height: AppSpace.xl),
+          GhostButton(
+            label: 'Sign out',
+            icon: PhosphorIconsRegular.signOut,
+            color: AppColors.danger,
+            onPressed: () => ref.read(authProvider.notifier).logout(),
+          ),
+        ]),
       ),
     );
   }

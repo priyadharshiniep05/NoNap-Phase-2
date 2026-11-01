@@ -16,6 +16,7 @@ from server.app.db.models_auth import User, Fleet, FleetDriver
 from server.app.db.models_ops import AlertLog, Threshold
 from server.app.db.sync import ensure_user_thresholds
 from server.app.realtime.connection_manager import manager
+from server.app.core.timezone import ist_wall_now
 from server.app.schemas.driver import (
     DriverProfileResponse,
     DriverStatsResponse,
@@ -73,7 +74,7 @@ def get_driver_stats(
     ).count()
 
     # Alerts today (past 24h)
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = ist_wall_now() - timedelta(hours=24)  # detected_at is IST wall-clock
     alerts_today = ops_db.query(AlertLog).filter(
         AlertLog.driver_id == driver.id,
         AlertLog.detected_at >= since,
@@ -113,25 +114,7 @@ def get_driver_alerts(
         .all()
     )
 
-    return [
-        AlertLogResponse(
-            id=a.id,
-            driver_id=a.driver_id,
-            driver_name=driver.full_name,
-            fleet_id=a.fleet_id,
-            type=a.type,
-            severity=a.severity,
-            confidence=a.confidence,
-            ear=a.ear,
-            mar=a.mar,
-            perclos=a.perclos,
-            source=a.source,
-            detected_at=a.detected_at,
-            acknowledged=a.acknowledged,
-            acknowledged_by=a.acknowledged_by,
-        )
-        for a in alerts
-    ]
+    return [AlertLogResponse.from_row(a, driver.full_name) for a in alerts]
 
 
 @router.get("/thresholds", response_model=ThresholdResponse)
@@ -167,3 +150,45 @@ def update_my_thresholds(
     ops_db.commit()
     ops_db.refresh(t)
     return ThresholdResponse.model_validate(t)
+
+
+@router.post("/calibrate/start")
+def start_driver_calibration(
+    duration: float = 10.0,
+    driver: User = Depends(require_role(Role.driver)),
+):
+    """Start a 10-second personalized baseline calibration session."""
+    from server.app.services.calibration_service import calibration_service
+    session = calibration_service.start_calibration(driver.id, duration_seconds=duration)
+    return {
+        "status": "calibrating",
+        "driver_id": driver.id,
+        "duration_seconds": duration,
+        "message": "Keep eyes open and mouth relaxed while looking at the camera.",
+    }
+
+
+@router.get("/calibrate/status")
+def get_driver_calibration_status(
+    driver: User = Depends(require_role(Role.driver)),
+):
+    """Get current calibration progress, status, and derived thresholds."""
+    from server.app.services.calibration_service import calibration_service
+    session = calibration_service.get_session(driver.id)
+    if not session:
+        return {
+            "status": "idle",
+            "is_calibrating": False,
+            "progress": 0.0,
+            "remaining_seconds": 0.0,
+        }
+
+    return {
+        "status": "completed" if session.is_complete else ("calibrating" if session.is_active else "idle"),
+        "is_calibrating": session.is_active,
+        "is_complete": session.is_complete,
+        "progress": round(session.progress, 2),
+        "remaining_seconds": round(session.remaining_seconds, 1),
+        "samples_collected": len(session.ear_samples),
+        "result": session.result,
+    }

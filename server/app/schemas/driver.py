@@ -2,7 +2,8 @@
 
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
+from server.app.core.timezone import as_ist
 from server.app.schemas.ops import AlertLogResponse, ThresholdResponse
 
 
@@ -25,3 +26,7 @@ class DriverStatsResponse(BaseModel):
     alerts_today: int
     last_alert_time: Optional[datetime] = None
     current_status: str = "alert"  # alert, drowsy, yawning, no_face
+
+    @field_serializer("last_alert_time")
+    def _ser_ist(self, dt: Optional[datetime]):
+        return as_ist(dt).isoformat() if dt else None

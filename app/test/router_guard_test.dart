@@ -1,125 +1,47 @@
+import 'package:app/router/app_router.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:app/models/user.dart';
+
+String? go(String loc, {bool booting = false, bool auth = true, String role = 'driver'}) => roleRedirect(
+      booting: booting,
+      isAuthenticated: auth,
+      isDriver: auth && role == 'driver',
+      isFleetManager: auth && role == 'fleet_manager',
+      location: loc,
+    );
 
 void main() {
-  group('Role Guard Logic Tests', () {
-    String? computeRedirect({
-      required bool isAuthenticated,
-      required User? user,
-      required String matchedLocation,
-    }) {
-      final isAuthRoute = matchedLocation == '/login' || matchedLocation == '/signup';
-      if (!isAuthenticated) {
-        return isAuthRoute ? null : '/login';
-      }
-
-      final isDriver = user?.isDriver ?? false;
-      final isFleetManager = user?.isFleetManager ?? false;
-
-      if (isAuthRoute) {
-        return isDriver ? '/driver' : '/fleet';
-      }
-
-      // Driver attempting to access Fleet routes -> block and redirect to /driver
-      if (isDriver && matchedLocation.startsWith('/fleet')) {
-        return '/driver';
-      }
-
-      // Fleet Manager attempting to access Driver routes -> block and redirect to /fleet
-      if (isFleetManager && matchedLocation.startsWith('/driver')) {
-        return '/fleet';
-      }
-
-      return null;
-    }
-
-    test('Unauthenticated user is redirected to /login when visiting /driver', () {
-      final redirect = computeRedirect(
-        isAuthenticated: false,
-        user: null,
-        matchedLocation: '/driver',
-      );
-      expect(redirect, '/login');
+  group('Role guard', () {
+    test('splash while the saved session is being checked', () {
+      expect(go('/driver', booting: true), '/splash');
+      expect(go('/splash', booting: true), isNull);
     });
 
-    test('Unauthenticated user is redirected to /login when visiting /fleet', () {
-      final redirect = computeRedirect(
-        isAuthenticated: false,
-        user: null,
-        matchedLocation: '/fleet',
-      );
-      expect(redirect, '/login');
+    test('signed-out users only reach login and signup', () {
+      expect(go('/driver', auth: false), '/login');
+      expect(go('/fleet', auth: false), '/login');
+      expect(go('/driver/history', auth: false), '/login');
+      expect(go('/login', auth: false), isNull);
+      expect(go('/signup', auth: false), isNull);
     });
 
-    test('Unauthenticated user is allowed to access /login and /signup', () {
-      expect(
-        computeRedirect(isAuthenticated: false, user: null, matchedLocation: '/login'),
-        isNull,
-      );
-      expect(
-        computeRedirect(isAuthenticated: false, user: null, matchedLocation: '/signup'),
-        isNull,
-      );
+    test('drivers can never open fleet screens', () {
+      expect(go('/fleet'), '/driver');
+      expect(go('/fleet/driver/abc'), '/driver');
+      expect(go('/fleet/settings'), '/driver');
+      expect(go('/driver/history'), isNull);
+      expect(go('/driver/calibration'), isNull);
     });
 
-    test('Driver is redirected away from /fleet to /driver', () {
-      final driver = User(
-        id: 'd1',
-        fullName: 'Test Driver',
-        email: 'driver@test.com',
-        role: 'driver',
-      );
-      final redirect = computeRedirect(
-        isAuthenticated: true,
-        user: driver,
-        matchedLocation: '/fleet/dashboard',
-      );
-      expect(redirect, '/driver');
+    test('fleet managers can never open driver screens', () {
+      expect(go('/driver', role: 'fleet_manager'), '/fleet');
+      expect(go('/driver/settings', role: 'fleet_manager'), '/fleet');
+      expect(go('/fleet/driver/abc', role: 'fleet_manager'), isNull);
     });
 
-    test('Fleet manager is redirected away from /driver to /fleet', () {
-      final manager = User(
-        id: 'm1',
-        fullName: 'Test Manager',
-        email: 'manager@test.com',
-        role: 'fleet_manager',
-      );
-      final redirect = computeRedirect(
-        isAuthenticated: true,
-        user: manager,
-        matchedLocation: '/driver/history',
-      );
-      expect(redirect, '/fleet');
-    });
-
-    test('Logged in driver on /login is redirected to /driver', () {
-      final driver = User(
-        id: 'd1',
-        fullName: 'Test Driver',
-        email: 'driver@test.com',
-        role: 'driver',
-      );
-      final redirect = computeRedirect(
-        isAuthenticated: true,
-        user: driver,
-        matchedLocation: '/login',
-      );
-      expect(redirect, '/driver');
-    });
-
-    test('Logged in manager on /login is redirected to /fleet', () {
-      final manager = User(
-        id: 'm1',
-        fullName: 'Test Manager',
-        email: 'manager@test.com',
-        role: 'fleet_manager',
-      );
-      final redirect = computeRedirect(
-        isAuthenticated: true,
-        user: manager,
-        matchedLocation: '/login',
-      );
-      expect(redirect, '/fleet');
+    test('signed-in users leave auth screens for their own home', () {
+      expect(go('/login'), '/driver');
+      expect(go('/splash'), '/driver');
+      expect(go('/login', role: 'fleet_manager'), '/fleet');
     });
   });
 }

@@ -95,8 +95,12 @@ class ConnectionManager:
         timestamp_hhmm: str,
         iso_timestamp: str,
         is_alert: bool = False,
-    ):
-        """Broadcast detection result with role-appropriate messaging and scoping."""
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Broadcast detection result with role-appropriate messaging and scoping.
+
+        Returns the number of sockets the message was delivered to.
+        """
         # Update latest state cache
         self.set_latest_status(driver_id, {
             "status": status,
@@ -106,6 +110,7 @@ class ConnectionManager:
             "timestamp": iso_timestamp,
             "driver_name": driver_name,
             "fleet_id": driver_fleet_id,
+            **(extra or {}),
         })
 
         # Format message based on status
@@ -131,6 +136,7 @@ class ConnectionManager:
         msg_type = "alert" if is_alert else "telemetry"
 
         dead_connections: List[Connection] = []
+        delivered = 0
 
         async with self._lock:
             connections = list(self.active_connections)
@@ -149,12 +155,15 @@ class ConnectionManager:
                             "confidence": round(confidence, 3),
                             "metrics": metrics,
                             "timestamp": iso_timestamp,
+                            "timestamp_ist": timestamp_hhmm,
                             "message": driver_msg,
+                            **(extra or {}),
                         }
                         await conn.websocket.send_json(payload)
+                        delivered += 1
                 # Fleet manager: sees data for drivers in their fleet
                 elif conn.role == "fleet_manager":
-                    if conn.fleet_id is None or conn.fleet_id == driver_fleet_id:
+                    if conn.fleet_id is not None and conn.fleet_id == driver_fleet_id:
                         payload = {
                             "type": msg_type,
                             "driver_id": driver_id,
@@ -164,19 +173,91 @@ class ConnectionManager:
                             "confidence": round(confidence, 3),
                             "metrics": metrics,
                             "timestamp": iso_timestamp,
+                            "timestamp_ist": timestamp_hhmm,
                             "message": manager_msg,
+                            **(extra or {}),
                         }
                         await conn.websocket.send_json(payload)
+                        delivered += 1
             except Exception as e:
                 logger.warning(f"Error sending message to conn {conn.user_id}: {e}")
                 dead_connections.append(conn)
 
-        if dead_connections:
-            async with self._lock:
-                self.active_connections = [
-                    c for c in self.active_connections if c not in dead_connections
-                ]
+        await self._drop(dead_connections)
+        return delivered
 
+    async def _drop(self, dead: List[Connection]) -> None:
+        if dead:
+            async with self._lock:
+                self.active_connections = [c for c in self.active_connections if c not in dead]
+
+    async def send_scoped(
+        self,
+        driver_id: str,
+        driver_fleet_id: Optional[str],
+        driver_payload: Optional[Dict[str, Any]],
+        fleet_payload: Optional[Dict[str, Any]],
+    ) -> int:
+        """Send one event about a driver: the driver gets driver_payload, the
+        manager of that driver's fleet gets fleet_payload. Nobody else."""
+        async with self._lock:
+            connections = list(self.active_connections)
+
+        dead: List[Connection] = []
+        delivered = 0
+        for conn in connections:
+            if conn.role == "driver" and conn.user_id == driver_id:
+                payload = driver_payload
+            elif (
+                conn.role == "fleet_manager"
+                and conn.fleet_id is not None
+                and conn.fleet_id == driver_fleet_id
+            ):
+                payload = fleet_payload
+            else:
+                continue
+            if payload is None:
+                continue
+            try:
+                await conn.websocket.send_json(payload)
+                delivered += 1
+            except Exception as e:
+                logger.warning(f"Error sending event to {conn.user_id}: {e}")
+                dead.append(conn)
+        await self._drop(dead)
+        return delivered
+
+    async def send_to_user(self, user_id: str, payload: Dict[str, Any]) -> None:
+        async with self._lock:
+            connections = [c for c in self.active_connections if c.user_id == user_id]
+        for conn in connections:
+            try:
+                await conn.websocket.send_json(payload)
+            except Exception:
+                await self._drop([conn])
+
+
+    async def broadcast_calibration_event(
+        self,
+        driver_id: str,
+        event_type: str,  # calibration_progress, calibration_complete
+        data: Dict[str, Any],
+    ):
+        """Send calibration status or result to the driver's active WebSocket."""
+        async with self._lock:
+            connections = list(self.active_connections)
+
+        payload = {
+            "type": event_type,
+            "driver_id": driver_id,
+            **data,
+        }
+        for conn in connections:
+            if conn.role == "driver" and conn.user_id == driver_id:
+                try:
+                    await conn.websocket.send_json(payload)
+                except Exception as e:
+                    logger.warning(f"Error sending calibration event to {conn.user_id}: {e}")
 
 # Singleton instance
 manager = ConnectionManager()

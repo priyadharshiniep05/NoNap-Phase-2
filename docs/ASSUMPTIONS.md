@@ -38,6 +38,30 @@ This document records the sensible assumptions made during development to mainta
 - **Local Notifications:** Because Apple APNs push notifications require a paid Apple Developer Account ($99/year), real-time alerts on the iPhone are triggered via local notifications (`flutter_local_notifications`) driven by the live WebSocket connection while the app is active or in background session.
 - **FCM Service:** Backend includes a complete FCM notification service stub (`notify_service.py`) that remains inactive unless `FCM_ENABLED=true` is set.
 
-### 6. Raspberry Pi Client
-- **Pi 1 Model B Constraints:** The Pi 1 has 256 MB RAM and an ARMv6 single-core processor. It performs zero ML inference.
-- **Role:** Pure sensor and actuator client: captures low-resolution JPEG frames (320x240) in memory at ~1 fps, transmits them via HTTP POST to `/detect/frame`, and activates the hardware buzzer on GPIO17 based on the server's boolean response.
+### 6. Raspberry Pi Client (updated for the alerting build)
+- **Pi 1 Model B Constraints:** 256 MB RAM, ARMv6 single core, no Wi-Fi/Bluetooth. It performs zero ML inference and connects by Ethernet.
+- **Role:** thin client (`pi_client/nonap_pi.py`). It captures 320x240 JPEG frames in memory at ~3 fps, POSTs them to `/api/v1/frames`, and reacts to the returned alert level with the on-board ACT LED and sounds through the 3.5 mm jack (`aplay`). **There is no buzzer and no GPIO wiring**; `buzzer_enabled` exists only as a disabled config flag.
+- **Alert levels** are time-window based (1.0 s / 2.0 s / 10 s unacknowledged) and described in `docs/PAPER_NOTES.md`. They supersede the 1.5 s / 30 s cooldown rules in section 2 for alerting; the model's temporal tracker still provides PERCLOS telemetry.
+- **Databases** are SQLite in development (URLs from `.env`). DB2 schema changes go through Alembic (`server/migrations`), applied automatically on startup.
+
+### 7. Phase 2 Upgrade: Live Landmarks, Personal Calibration, & IST Localization
+- **Real-Time EAR & MAR:** Computed live per frame using MediaPipe Face Mesh (468 landmarks):
+  - Eye Aspect Ratio (EAR) averaged across 6-point landmarks for both eyes.
+  - Mouth Aspect Ratio (MAR) computed across 8 inner-lip landmarks.
+  - 5-frame moving average smoothing eliminates high-frequency noise and micro-jitter without adding latency.
+- **Personalized Baseline Calibration:**
+  - 10-second baseline capture computes individual open-eye EAR and relaxed MAR ($\mu, \sigma$).
+  - Personalized thresholds: $\text{EAR}_{\text{drowsy}} = \min(0.75\mu, \mu - 2\sigma)$ and $\text{MAR}_{\text{yawn}} = \mu + 3\sigma$ (floor 0.55).
+  - Saved to DB2 (`ops.db`, `thresholds` table, `scope='user'`) and reloaded automatically across sessions; recalibratable at any time.
+- **10-Second Cooldown & Severity Escalation:**
+  - Prevents alert notification floods while escalating from `medium` $\to$ `high` $\to$ `critical` if drowsiness or eye-closure persists.
+- **Audible Laptop Alarm:**
+  - Triggers macOS system sound (`afplay /System/Library/Sounds/Sosumi.aiff`) concurrently with mobile WebSocket dispatch.
+- **Video Source Flag (`--source`):**
+  - Supports webcam index integer (e.g. `0`) or file path to video (e.g. `.mp4`) with seamless looping for reproducible testing.
+- **Real-Time Fleet State Mutation:**
+  - Fleet dashboard uses pure WebSocket push state mutation (no polling). Driver cards and alert feeds update immediately upon alert arrival. Simulated drivers are explicitly labeled `[SIMULATED]` in the UI.
+- **Indian Context & IST Timezone:**
+  - All usernames, emails, vehicle plates, routes, and logs use Indian conventions (Priyadarshini Prasanna, Ananya Iyer, Nishant Sharma, KA-01-AB-1234, Bengaluru).
+  - All timestamps are converted and presented consistently in `Asia/Kolkata` (IST, UTC+5:30) with explicit `HH:mm IST` indicators.
+

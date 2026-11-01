@@ -28,6 +28,34 @@ class Settings(BaseSettings):
     WEBCAM_INDEX: int = 0
     WEBCAM_FPS: int = 10
 
+    # Frame source feeding the detection pipeline: "pi" (frames POSTed to
+    # /api/v1/frames by the Raspberry Pi) or "webcam" (MacBook webcam worker).
+    VIDEO_SOURCE: str = "pi"
+
+    # Shared secret the Pi (and tools/simulate_pi.py) send as X-Device-Key.
+    DEVICE_API_KEY: str = "nonap-dev-device-key"
+    # A device is offline when no heartbeat or frame arrived for this long.
+    DEVICE_OFFLINE_SECONDS: float = 12.0
+
+    # Alert level timing (seconds). Time windows, not frame counts.
+    L1_EYES_LOW_SECONDS: float = 1.0
+    L2_EYES_LOW_SECONDS: float = 2.0
+    YAWN_MIN_SECONDS: float = 1.0
+    L1_REPEAT_COUNT: int = 3
+    L1_REPEAT_WINDOW_SECONDS: float = 60.0
+    ACK_TIMEOUT_SECONDS: float = 10.0
+    EPISODE_END_SECONDS: float = 1.5
+    ALERT_COOLDOWN_SECONDS: float = 5.0
+    MAX_FRAME_GAP_SECONDS: float = 1.5
+    # Live EAR/MAR telemetry rate on the WebSocket.
+    TELEMETRY_HZ: float = 2.0
+
+    # Play a macOS system sound on the MacBook for level >= 2 alerts.
+    LAPTOP_ALARM_ENABLED: bool = False
+
+    # Latency instrumentation CSVs (logs/latency_<date>.csv)
+    LATENCY_LOG_DIR: str = "logs"
+
     # Integrations
     CONTROL_CENTER_WEBHOOK_URL: str = "http://localhost:8000/mock/webhook"
     FCM_ENABLED: bool = False

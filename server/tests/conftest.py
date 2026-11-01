@@ -1,4 +1,13 @@
-"""Pytest fixtures for server testing with isolated databases and auth tokens."""
+import sys
+from pathlib import Path
+
+# Add project root and model directory to sys.path
+_project_root = Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+_model_dir = str(_project_root / "model")
+if _model_dir not in sys.path:
+    sys.path.insert(0, _model_dir)
 
 import pytest
 from fastapi.testclient import TestClient

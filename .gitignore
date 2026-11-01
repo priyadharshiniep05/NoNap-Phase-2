@@ -56,3 +56,6 @@ Icon
 # Environment variables
 .env
 pi-client/config.env
+
+# Latency instrumentation output
+logs/

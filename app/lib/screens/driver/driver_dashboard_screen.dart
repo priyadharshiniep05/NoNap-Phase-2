@@ -1,14 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
+
+import '../../core/ist.dart';
+import '../../models/alert_item.dart';
+import '../../models/session_info.dart';
+import '../../providers/alert_controller.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/telemetry_provider.dart';
+import '../../providers/driver_live_provider.dart';
 import '../../providers/driver_provider.dart';
-import '../../theme/app_colors.dart';
-import '../../widgets/metric_gauge.dart';
-import '../../widgets/status_hero_card.dart';
-import '../../widgets/alert_tile.dart';
+import '../../services/ws_service.dart';
+import '../../theme/tokens.dart';
+import '../../theme/typography.dart';
 import '../../widgets/live_video_preview.dart';
+import '../../widgets/metric_card.dart';
+import '../../widgets/status_ring.dart';
+import '../../widgets/ui.dart';
 
 class DriverDashboardScreen extends ConsumerStatefulWidget {
   const DriverDashboardScreen({super.key});
@@ -18,274 +27,323 @@ class DriverDashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _DriverDashboardScreenState extends ConsumerState<DriverDashboardScreen> {
-  bool _isCameraActive = true;
+  bool _showCamera = false;
 
-  @override
-  void initState() {
-    super.initState();
-    // Auto-start webcam monitoring for driver on load
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _startMonitoring();
-    });
+  Future<void> _toggleSession(bool active) async {
+    final live = ref.read(driverLiveProvider.notifier);
+    final err = active ? await live.endSession() : await live.startSession();
+    if (!mounted) return;
+    if (err != null) {
+      showToast(context, err, error: true);
+    } else {
+      showToast(context, active ? 'Session ended. Drive safe.' : 'Driving mode on. The screen stays awake.');
+    }
   }
 
-  Future<void> _startMonitoring() async {
-    try {
-      final user = ref.read(authProvider).user;
-      await ref.read(apiServiceProvider).startMonitoring(driverId: user?.id);
-      ref.read(telemetryProvider.notifier).setMonitoring(true);
-      setState(() => _isCameraActive = true);
-    } catch (_) {}
-  }
-
-  Future<void> _stopMonitoring() async {
-    try {
-      await ref.read(apiServiceProvider).stopMonitoring();
-      ref.read(telemetryProvider.notifier).setMonitoring(false);
-      setState(() => _isCameraActive = false);
-    } catch (_) {}
-  }
-
-  Future<void> _triggerSos() async {
-    final confirmed = await showDialog<bool>(
+  Future<void> _sos() async {
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Confirm Emergency SOS', style: TextStyle(color: AppColors.drowsyRed)),
-        content: const Text(
-          'This will immediately log a critical accident alert and notify the fleet manager and emergency dispatch.',
-        ),
+        title: const Text('Send emergency SOS?'),
+        content: const Text('Your fleet manager is alerted immediately as a critical emergency.'),
         actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.drowsyRed),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('TRIGGER SOS'),
+            child: Text('Send SOS', style: AppText.label(color: AppColors.danger)),
           ),
         ],
       ),
     );
-
-    if (confirmed == true) {
-      final user = ref.read(authProvider).user;
-      await ref.read(apiServiceProvider).reportAccidentSos(driverId: user?.id);
-      ref.read(driverDataProvider.notifier).refresh();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: AppColors.accidentDarkRed,
-            content: Text('CRITICAL ACCIDENT SOS BROADCASTED!'),
-          ),
-        );
-      }
+    if (ok != true || !mounted) return;
+    try {
+      await ref.read(apiServiceProvider).reportAccidentSos(driverId: ref.read(authProvider).user?.id);
+      if (mounted) showToast(context, 'SOS sent to your fleet manager.');
+    } catch (_) {
+      if (mounted) showToast(context, "Couldn't send SOS. Check the connection.", error: true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final authState = ref.watch(authProvider);
-    final telemetry = ref.watch(telemetryProvider);
-    final driverData = ref.watch(driverDataProvider);
+    final user = ref.watch(authProvider).user;
+    final live = ref.watch(driverLiveProvider);
+    final data = ref.watch(driverDataProvider);
+    final ws = ref.watch(wsStatusProvider).valueOrNull ?? WsStatus.connecting;
+    final alertUi = ref.watch(alertControllerProvider);
 
-    final latest = telemetry.latest;
-    final currentStatus = latest?.status ?? 'alert';
-    final currentMsg = latest?.message ?? 'Monitoring system active. Focused driving.';
-    final currentTimestamp = latest?.timestamp ?? '';
-    final ear = latest?.ear ?? 0.28;
-    final mar = latest?.mar ?? 0.15;
-    final perclos = latest?.perclos ?? 0.04;
+    // Session counters move when an alert is raised or acknowledged.
+    ref.listen(alertControllerProvider, (prev, next) {
+      if (prev?.takeover?.id != next.takeover?.id || prev?.banner?.id != next.banner?.id || next.confirmed != null) {
+        ref.read(driverLiveProvider.notifier).refreshSession();
+      }
+    });
 
-    // Threshold references
-    final earThresh = (driverData.thresholds?['ear_threshold'] as num?)?.toDouble() ?? 0.21;
-    final marThresh = (driverData.thresholds?['mar_threshold'] as num?)?.toDouble() ?? 0.60;
-    final perclosThresh = (driverData.thresholds?['perclos_threshold'] as num?)?.toDouble() ?? 0.40;
+    final t = live.latest;
+    final earT = t?.earThreshold ?? data.earThreshold;
+    final marT = t?.marThreshold ?? data.marThreshold;
+    final level = alertUi.level > 0 ? alertUi.level : (t?.level ?? 0);
+    final session = live.session;
+    final d = AppMotion.reduced(context) ? Duration.zero : 1.ms;
+
+    // Hero ring
+    String word;
+    String? sub;
+    bool active = true;
+    if (!live.cameraOnline && !live.isLive) {
+      word = live.videoSource == 'pi' ? 'Camera offline' : 'Camera idle';
+      sub = live.videoSource == 'pi' ? 'Check the Pi and its Ethernet cable' : (session.active ? 'Starting the webcam…' : 'Start driving to turn the webcam on');
+      active = false;
+    } else if (!live.isLive) {
+      word = 'Waiting';
+      sub = 'Camera is online, waiting for frames';
+      active = false;
+    } else if (t!.state == 'no_face') {
+      word = 'No face detected';
+      sub = 'Look towards the camera';
+    } else if (level >= 2) {
+      word = 'Drowsy';
+      sub = 'Level $level alert';
+    } else if (level == 1 || t.state == 'drowsy') {
+      word = 'Drowsy';
+      sub = t.reason == 'yawn' ? 'Yawning detected' : 'Eyes closing · ${t.eyesClosedSeconds.toStringAsFixed(1)} s';
+    } else {
+      word = 'Alert';
+      sub = 'Eyes open · monitoring';
+    }
+    final risk = riskOf(level: level, eyesClosedSeconds: t?.eyesClosedSeconds ?? 0);
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.cyan.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.cyan.withValues(alpha: 0.4)),
-              ),
-              child: const Text(
-                'DRIVER MODE',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.cyan,
-                  letterSpacing: 0.8,
+      body: PageBackground(
+        child: SafeArea(
+          bottom: false,
+          child: RefreshIndicator(
+            color: AppColors.primary,
+            backgroundColor: AppColors.surface,
+            onRefresh: () async {
+              await Future.wait([
+                ref.read(driverLiveProvider.notifier).refresh(),
+                ref.read(driverDataProvider.notifier).refresh(),
+              ]);
+            },
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(AppSpace.gutter, AppSpace.l, AppSpace.gutter, AppSpace.xxxl),
+              children: [
+                // Header
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${Ist.greeting()},', style: AppText.body(color: AppColors.textMuted)),
+                      Text(firstNameOf(user?.fullName ?? 'Driver'), style: AppText.headline()),
+                      const SizedBox(height: 2),
+                      Text('${Ist.hm(DateTime.now())} IST · ${Ist.dayLabel(DateTime.now())}',
+                          style: AppText.caption(color: AppColors.textSecondary)),
+                    ]),
+                  ),
+                  _RoundIcon(icon: PhosphorIconsRegular.clockCounterClockwise, label: 'Alert history', onTap: () => context.push('/driver/history')),
+                  const SizedBox(width: AppSpace.s),
+                  _RoundIcon(icon: PhosphorIconsRegular.gearSix, label: 'Settings', onTap: () => context.push('/driver/settings')),
+                ]),
+                const SizedBox(height: AppSpace.l),
+                // Connection chips
+                Wrap(spacing: AppSpace.s, runSpacing: AppSpace.s, children: [
+                  ConnectionChip(
+                    label: ws == WsStatus.connected ? 'Backend' : (ws == WsStatus.reconnecting ? 'Reconnecting' : 'Connecting'),
+                    tone: ws == WsStatus.connected ? ChipTone.ok : (ws == WsStatus.disconnected ? ChipTone.bad : ChipTone.warn),
+                    icon: PhosphorIconsRegular.broadcast,
+                  ),
+                  if (live.videoSource == 'pi')
+                    ConnectionChip(
+                      label: 'Pi Camera',
+                      detail: live.device?.online == true
+                          ? [
+                              if (live.device!.fps != null) '${live.device!.fps!.toStringAsFixed(1)} fps',
+                              if (live.device!.cpuTempC != null) '${live.device!.cpuTempC!.round()}°C',
+                            ].join(' · ')
+                          : 'offline',
+                      tone: live.device?.online == true ? ChipTone.ok : ChipTone.bad,
+                      icon: PhosphorIconsRegular.camera,
+                    )
+                  else
+                    ConnectionChip(
+                      label: 'MacBook cam',
+                      tone: live.isLive ? ChipTone.ok : ChipTone.idle,
+                      icon: PhosphorIconsRegular.camera,
+                    ),
+                  ConnectionChip(
+                    label: live.isLive ? 'Live' : 'Idle',
+                    tone: live.isLive ? ChipTone.ok : ChipTone.idle,
+                    icon: PhosphorIconsRegular.pulse,
+                  ),
+                ]),
+                const SizedBox(height: AppSpace.xl),
+                // Hero
+                Center(
+                  child: StatusRing(word: word, sub: sub, risk: risk, active: active, size: 264),
+                ).animate().fadeIn(duration: d * 500).scaleXY(begin: 0.96, end: 1, curve: AppMotion.curve, duration: d * 500),
+                const SizedBox(height: AppSpace.xl),
+                // Metrics
+                Row(children: [
+                  Expanded(
+                    child: MetricCard(
+                      label: 'EAR',
+                      hint: 'eye openness',
+                      value: live.isLive && t!.hasFace ? t.ear : null,
+                      threshold: earT,
+                      series: live.ear,
+                      lowIsBad: true,
+                      floorMax: 0.40,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpace.m),
+                  Expanded(
+                    child: MetricCard(
+                      label: 'MAR',
+                      hint: 'mouth',
+                      value: live.isLive && t!.hasFace ? t.mar : null,
+                      threshold: marT,
+                      series: live.mar,
+                      lowIsBad: false,
+                      floorMax: 0.90,
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: AppSpace.m),
+                // Session
+                _SessionCard(session: session),
+                const SizedBox(height: AppSpace.m),
+                // Camera preview
+                GlassCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(children: [
+                    ListTile(
+                      onTap: () => setState(() => _showCamera = !_showCamera),
+                      leading: Icon(PhosphorIconsRegular.camera, color: AppColors.textSecondary),
+                      title: Text('Camera view', style: AppText.label()),
+                      subtitle: Text('Frames stay in memory, nothing is recorded', style: AppText.caption()),
+                      trailing: AnimatedRotation(
+                        turns: _showCamera ? 0.25 : 0,
+                        duration: AppMotion.of(context, AppMotion.fast),
+                        child: Icon(PhosphorIconsRegular.caretRight, color: AppColors.textMuted),
+                      ),
+                    ),
+                    AnimatedSize(
+                      duration: AppMotion.of(context, AppMotion.medium),
+                      curve: AppMotion.curve,
+                      child: _showCamera
+                          ? Padding(
+                              padding: const EdgeInsets.fromLTRB(AppSpace.m, 0, AppSpace.m, AppSpace.m),
+                              child: LiveVideoPreview(source: live.videoSource),
+                            )
+                          : const SizedBox(width: double.infinity),
+                    ),
+                  ]),
                 ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                authState.user?.fullName ?? 'Driver',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.tune_rounded, color: AppColors.textSecondary),
-            tooltip: 'Threshold Settings',
-            onPressed: () => context.push('/driver/settings'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.history_rounded, color: AppColors.textSecondary),
-            tooltip: 'Alert History',
-            onPressed: () => context.push('/driver/history'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: AppColors.textMuted),
-            tooltip: 'Sign Out',
-            onPressed: () => ref.read(authProvider.notifier).logout(),
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          await ref.read(driverDataProvider.notifier).refresh();
-        },
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 1. Prominent Status Hero Card
-              StatusHeroCard(
-                status: currentStatus,
-                message: currentMsg,
-                timestamp: currentTimestamp,
-                confidence: latest?.confidence ?? 0.95,
-              ),
-              const SizedBox(height: 16),
-
-              // 2. Live Video Preview (MacBook Webcam via USB-C/LAN)
-              if (_isCameraActive) ...[
-                const LiveVideoPreview(),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpace.m),
+                Row(children: [
+                  Expanded(
+                    child: GhostButton(
+                      label: 'Calibrate',
+                      icon: PhosphorIconsRegular.target,
+                      color: AppColors.primary,
+                      onPressed: () => context.push('/driver/calibration'),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpace.m),
+                  Expanded(
+                    child: GhostButton(label: 'SOS', icon: PhosphorIconsRegular.siren, color: AppColors.danger, onPressed: _sos),
+                  ),
+                ]),
+                const SizedBox(height: AppSpace.l),
+                GradientButton(
+                  label: session.active ? 'End session' : 'Start driving',
+                  icon: session.active ? PhosphorIconsFill.stopCircle : PhosphorIconsFill.steeringWheel,
+                  gradient: session.active ? AppGlow.dangerButton : AppGlow.primaryButton,
+                  foreground: session.active ? AppColors.textPrimary : AppColors.onPrimary,
+                  loading: live.sessionBusy,
+                  height: 60,
+                  onPressed: () => _toggleSession(session.active),
+                ),
               ],
-
-              // 3. Real-Time Telemetry Gauges (EAR, MAR, PERCLOS)
-              Row(
-                children: [
-                  Expanded(
-                    child: MetricGauge(
-                      label: 'EAR (Eyes)',
-                      value: ear,
-                      threshold: earThresh,
-                      max: 0.45,
-                      inverted: true, // Low EAR indicates closed eyes
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: MetricGauge(
-                      label: 'MAR (Mouth)',
-                      value: mar,
-                      threshold: marThresh,
-                      max: 1.20,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: MetricGauge(
-                      label: 'PERCLOS',
-                      value: perclos,
-                      threshold: perclosThresh,
-                      max: 1.0,
-                      unit: '%',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // 4. Action Controls: Monitoring Toggle & SOS Accident Button
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _isCameraActive ? AppColors.surfaceElevated : AppColors.cyan,
-                        foregroundColor: _isCameraActive ? Colors.white : AppColors.background,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      onPressed: _isCameraActive ? _stopMonitoring : _startMonitoring,
-                      icon: Icon(_isCameraActive ? Icons.videocam_off_rounded : Icons.videocam_rounded, size: 20),
-                      label: Text(_isCameraActive ? 'Pause Camera' : 'Start Camera', style: const TextStyle(fontSize: 13)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.drowsyRed,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      onPressed: _triggerSos,
-                      icon: const Icon(Icons.emergency_rounded, size: 20),
-                      label: const Text('EMERGENCY SOS', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-
-              // 5. Recent Alerts & Notifications Feed
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'RECENT NOTIFICATIONS',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.0,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => context.push('/driver/history'),
-                    child: const Text('View All', style: TextStyle(fontSize: 12, color: AppColors.cyan)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-
-              if (driverData.alerts.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceSubtle,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: const Center(
-                    child: Text(
-                      'No drowsiness alerts recorded. Great driving!',
-                      style: TextStyle(color: AppColors.textMuted, fontSize: 13),
-                    ),
-                  ),
-                )
-              else
-                ...driverData.alerts.take(5).map((a) => AlertTile(alert: a)),
-            ],
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _RoundIcon extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _RoundIcon({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: AppColors.surface.withValues(alpha: 0.6),
+        shape: const CircleBorder(side: BorderSide(color: AppColors.border)),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Padding(padding: const EdgeInsets.all(11), child: Icon(icon, size: 20, color: AppColors.textPrimary)),
+        ),
+      ),
+    );
+  }
+}
+
+class _SessionCard extends StatelessWidget {
+  final SessionInfo session;
+  const _SessionCard({required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    final started = session.startedAt;
+    final active = session.active;
+    final seconds = active && started != null ? DateTime.now().difference(started).inSeconds : session.drivingSeconds;
+    return GlassCard(
+      glow: active ? AppColors.primary : null,
+      padding: const EdgeInsets.all(AppSpace.l),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('SESSION', style: AppText.overline(color: AppColors.textSecondary)),
+          const SizedBox(width: AppSpace.s),
+          if (active)
+            const Pill('Driving', color: AppColors.success)
+          else
+            const Pill('Not driving', color: AppColors.textMuted),
+          const Spacer(),
+          if (started != null) Text('since ${Ist.hmIst(started)}', style: AppText.caption()),
+        ]),
+        const SizedBox(height: AppSpace.m),
+        Row(children: [
+          _SessionStat(label: 'Driving time', value: active || seconds > 0 ? Ist.clockSpan(seconds) : '—'),
+          _SessionStat(label: 'Alerts', value: active || session.alerts > 0 ? '${session.alerts}' : '—'),
+          _SessionStat(label: 'Avg. response', value: Ist.duration(session.avgAckMs)),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _SessionStat extends StatelessWidget {
+  final String label;
+  final String value;
+  const _SessionStat({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(value, style: AppText.metric(size: 22)),
+        const SizedBox(height: 4),
+        Text(label, style: AppText.caption()),
+      ]),
     );
   }
 }

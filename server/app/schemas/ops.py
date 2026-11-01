@@ -2,7 +2,9 @@
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
+
+from server.app.core.timezone import as_ist
 
 
 class ThresholdResponse(BaseModel):
@@ -43,8 +45,24 @@ class AlertLogResponse(BaseModel):
     detected_at: datetime
     acknowledged: bool
     acknowledged_by: Optional[str] = None
+    level: Optional[int] = None
+    status: Optional[str] = None
+    reason: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    response_time_ms: Optional[float] = None
+    escalated_at: Optional[datetime] = None
+    device_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("detected_at", "acknowledged_at", "escalated_at")
+    def _ser_ist(self, dt: Optional[datetime]):
+        # alert_logs stores naive IST wall-clock; always emit an explicit +05:30
+        return as_ist(dt).isoformat() if dt else None
+
+    @classmethod
+    def from_row(cls, a, driver_name: Optional[str] = None) -> "AlertLogResponse":
+        return cls.model_validate(a).model_copy(update={"driver_name": driver_name})
 
 
 class AlertAcknowledgeRequest(BaseModel):

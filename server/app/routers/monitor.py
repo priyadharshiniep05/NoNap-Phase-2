@@ -5,12 +5,12 @@ persisted to disk, respecting privacy and storage constraints.
 """
 
 import asyncio
-import time
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from typing import Optional, Union
+from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from server.app.core.config import get_settings
 from server.app.core.deps import get_current_user
 from server.app.db.models_auth import User
 from server.app.capture.webcam_worker import webcam_worker
@@ -21,6 +21,12 @@ router = APIRouter(prefix="/monitor", tags=["Webcam Monitoring"])
 class StartMonitorRequest(BaseModel):
     driver_id: Optional[str] = None
     camera_index: Optional[int] = None
+    source: Optional[Union[int, str]] = None  # 0 for webcam, or path to video file
+    mirror: Optional[bool] = True
+
+
+class SetMirrorRequest(BaseModel):
+    mirror: bool = True
 
 
 @router.post("/start")
@@ -28,22 +34,47 @@ def start_monitoring(
     payload: StartMonitorRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Start background webcam processing."""
-    # If user is a driver, default to their own user id
+    """Start background webcam or video file processing."""
     target_driver_id = payload.driver_id
     if current_user.role == "driver":
         target_driver_id = current_user.id
     elif not target_driver_id:
         target_driver_id = current_user.id
 
+    if get_settings().VIDEO_SOURCE == "pi":
+        # Frames come from the Raspberry Pi via /api/v1/frames; the webcam stays off.
+        return {
+            "status": "pi_mode",
+            "driver_id": target_driver_id,
+            "source": "pi",
+            "mirror": webcam_worker.mirror,
+            "is_running": False,
+        }
+
+    # Choose source: payload.source > payload.camera_index > 0
+    chosen_source = payload.source if payload.source is not None else payload.camera_index
+
     webcam_worker.start(
         driver_id=target_driver_id,
-        camera_index=payload.camera_index,
+        source=chosen_source,
+        mirror=payload.mirror,
     )
     return {
         "status": "started",
         "driver_id": target_driver_id,
+        "source": str(chosen_source or 0),
+        "mirror": webcam_worker.mirror,
         "is_running": webcam_worker.is_running,
+    }
+
+
+@router.post("/mirror")
+def toggle_mirror(payload: SetMirrorRequest):
+    """Toggle horizontal mirroring on the fly."""
+    webcam_worker.set_mirror(payload.mirror)
+    return {
+        "status": "ok",
+        "mirror": webcam_worker.mirror,
     }
 
 
@@ -51,7 +82,7 @@ def start_monitoring(
 def stop_monitoring(
     current_user: User = Depends(get_current_user),
 ):
-    """Stop background webcam capture."""
+    """Stop background capture."""
     webcam_worker.stop()
     return {
         "status": "stopped",
@@ -61,7 +92,7 @@ def stop_monitoring(
 
 @router.get("/status")
 def get_monitor_status():
-    """Get current capture status and FPS telemetry."""
+    """Get current capture status, source, and FPS telemetry."""
     return {
         "is_running": webcam_worker.is_running,
         "driver_id": webcam_worker.driver_id,
@@ -74,7 +105,6 @@ def get_preview_frame():
     """Retrieve the latest live frame as a single JPEG image."""
     jpeg_bytes = webcam_worker.get_preview_jpeg()
     if not jpeg_bytes:
-        # Fallback 1x1 blank JPEG if not started
         import cv2
         import numpy as np
         blank = np.zeros((240, 320, 3), dtype=np.uint8)
@@ -85,6 +115,7 @@ def get_preview_frame():
     return Response(content=jpeg_bytes, media_type="image/jpeg")
 
 
+@router.get("/preview.mjpg")
 @router.get("/stream")
 def get_mjpeg_stream():
     """Live MJPEG video stream over HTTP multipart."""

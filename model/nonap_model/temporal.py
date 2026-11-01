@@ -5,7 +5,8 @@ Maintains per-driver rolling windows (30s) to calculate:
 - Continuous eye closure duration (with micro-blink filtering)
 - Continuous yawn duration
 - Yawn frequency over 5 minutes
-- Alert cooldown and severity mapping
+- 10-second alert cooldown and escalation tracking
+- Reason for drowsiness alert: 'eyes_closed', 'yawn', 'perclos'
 """
 
 from collections import deque
@@ -22,7 +23,7 @@ class DriverTemporalTracker:
         mar_threshold: float = 0.60,
         perclos_threshold: float = 0.40,
         eyes_closed_seconds: float = 1.5,
-        alert_cooldown_seconds: float = 30.0,
+        alert_cooldown_seconds: float = 10.0,
         window_seconds: float = 30.0,
     ) -> None:
         self.ear_threshold = ear_threshold
@@ -32,7 +33,7 @@ class DriverTemporalTracker:
         self.alert_cooldown_seconds = alert_cooldown_seconds
         self.window_seconds = window_seconds
 
-        # Rolling observation frames within the 30s window: (timestamp, is_eyes_closed, is_yawning)
+        # Rolling observation frames within 30s window: (timestamp, is_eyes_closed, is_yawning)
         self.history: Deque[Tuple[float, bool, bool]] = deque()
 
         # Eye closure tracking
@@ -47,8 +48,26 @@ class DriverTemporalTracker:
         # Face presence tracking
         self.last_face_seen_time: float = time.time()
 
-        # Alert cooldown tracking: alert_type -> last_alert_time
+        # Alert cooldown & escalation tracking: alert_type -> last_alert_time
         self.last_alert_times: Dict[str, float] = {}
+        self.continuous_drowsy_duration: float = 0.0
+
+    def update_thresholds(
+        self,
+        ear_threshold: Optional[float] = None,
+        mar_threshold: Optional[float] = None,
+        perclos_threshold: Optional[float] = None,
+        eyes_closed_seconds: Optional[float] = None,
+    ) -> None:
+        """Update driver's personalized thresholds."""
+        if ear_threshold is not None:
+            self.ear_threshold = ear_threshold
+        if mar_threshold is not None:
+            self.mar_threshold = mar_threshold
+        if perclos_threshold is not None:
+            self.perclos_threshold = perclos_threshold
+        if eyes_closed_seconds is not None:
+            self.eyes_closed_seconds = eyes_closed_seconds
 
     def update(
         self,
@@ -66,7 +85,7 @@ class DriverTemporalTracker:
             timestamp: Frame capture timestamp in epoch seconds (defaults to now).
 
         Returns:
-            Dictionary containing derived status, severity, confidence, and metrics.
+            Dictionary containing derived status, severity, confidence, reason, and metrics.
         """
         now = timestamp if timestamp is not None else time.time()
 
@@ -76,19 +95,24 @@ class DriverTemporalTracker:
         time_since_face = now - self.last_face_seen_time
 
         if not has_face:
-            # If no face for > 5 seconds, report no_face status
-            if time_since_face > 5.0:
+            # If no face for > 3 seconds, report no_face status
+            if time_since_face > 3.0:
+                self.continuous_drowsy_duration = 0.0
                 return {
                     "status": "no_face",
                     "severity": "low",
                     "confidence": 0.95,
                     "is_alert": False,
+                    "alert_type": None,
+                    "reason": None,
                     "perclos": self._calculate_perclos(now),
                     "eyes_closed_s": 0.0,
                     "yawns_5min": self._count_yawns_5min(now),
+                    "ear_threshold": self.ear_threshold,
+                    "mar_threshold": self.mar_threshold,
                 }
 
-        # Determine instantaneous states
+        # Determine instantaneous states based on personalized thresholds
         is_eyes_closed = has_face and (ear < self.ear_threshold)
         is_yawning = has_face and (mar > self.mar_threshold)
 
@@ -106,7 +130,7 @@ class DriverTemporalTracker:
             if self.yawn_start_time is None:
                 self.yawn_start_time = now
             self.current_yawn_duration = now - self.yawn_start_time
-            # If sustained for at least 1.0s and not already recorded recently
+            # Sustained yawn >= 1.0s counted as a yawn event
             if self.current_yawn_duration >= 1.0:
                 if not self.yawn_events_5min or (now - self.yawn_events_5min[-1] > 3.0):
                     self.yawn_events_5min.append(now)
@@ -121,32 +145,45 @@ class DriverTemporalTracker:
         perclos = self._calculate_perclos(now)
         yawns_5min = self._count_yawns_5min(now)
 
-        # Filter micro-blinks: closures < 0.4s are ignored as normal physiological blinks
+        # Filter micro-blinks: normal blinks under 0.4s are ignored
         effective_closed_s = (
             self.current_closed_duration
             if self.current_closed_duration >= 0.4
             else 0.0
         )
 
-        # Evaluate Drowsy / Yawning / Alert conditions
         status = "alert"
         severity = "low"
         is_alert = False
+        alert_type = None
+        reason = None
         confidence = 0.85
 
-        # Check if enough time has elapsed in the window for PERCLOS to be statistically meaningful (>= 10s)
+        # Check statistical validity of PERCLOS (requires >= 10s of history)
         window_duration = (self.history[-1][0] - self.history[0][0]) if len(self.history) >= 2 else 0.0
         perclos_active = (window_duration >= 10.0 and len(self.history) >= 20 and perclos >= self.perclos_threshold)
 
-        # 1. Drowsiness condition: continuous closure >= eyes_closed_seconds OR sustained PERCLOS >= perclos_threshold
+        # 1. Drowsiness condition: continuous closure >= eyes_closed_seconds OR PERCLOS >= threshold
         if effective_closed_s >= self.eyes_closed_seconds or perclos_active:
             status = "drowsy"
-            # Severity mapping:
-            # - High: continuous closure >= 3.0s OR yawns_5min >= 3 OR PERCLOS >= 0.60
-            # - Medium: continuous closure 1.5s - 3.0s
-            if effective_closed_s >= 3.0 or yawns_5min >= 3 or (window_duration >= 10.0 and perclos >= 0.60):
+            alert_type = "drowsy"
+            self.continuous_drowsy_duration += 0.1
+
+            if effective_closed_s >= self.eyes_closed_seconds:
+                reason = "eyes_closed"
+            else:
+                reason = "perclos"
+
+            # Severity escalation:
+            # - Critical: continuous eye closure >= 5.0s
+            # - High: closure >= 3.0s OR yawns_5min >= 3 OR PERCLOS >= 0.60
+            # - Medium: closure 1.5s - 3.0s
+            if effective_closed_s >= 5.0:
+                severity = "critical"
+                confidence = 0.98
+            elif effective_closed_s >= 3.0 or yawns_5min >= 3 or (window_duration >= 10.0 and perclos >= 0.60):
                 severity = "high"
-                confidence = 0.96
+                confidence = 0.95
             else:
                 severity = "medium"
                 confidence = 0.90
@@ -158,24 +195,34 @@ class DriverTemporalTracker:
         # 2. Yawning condition: sustained yawn >= 1.0s
         elif self.current_yawn_duration >= 1.0:
             status = "yawning"
-            severity = "low"
+            alert_type = "yawning"
+            reason = "yawn"
+            severity = "low" if yawns_5min < 3 else "medium"
             confidence = 0.88
+            self.continuous_drowsy_duration = 0.0
+
             if self._can_trigger_alert("yawning", now):
                 is_alert = True
                 self.last_alert_times["yawning"] = now
+        else:
+            self.continuous_drowsy_duration = 0.0
 
         return {
             "status": status,
             "severity": severity,
             "confidence": float(confidence),
             "is_alert": is_alert,
+            "alert_type": alert_type,
+            "reason": reason,
             "perclos": round(float(perclos), 3),
             "eyes_closed_s": round(float(effective_closed_s), 2),
             "yawns_5min": int(yawns_5min),
+            "ear_threshold": round(self.ear_threshold, 3),
+            "mar_threshold": round(self.mar_threshold, 3),
         }
 
     def _can_trigger_alert(self, alert_type: str, now: float) -> bool:
-        """Enforce alert cooldown period (default 30s) per alert type."""
+        """Enforce alert cooldown period (10s) per alert type to prevent alert spam."""
         last_time = self.last_alert_times.get(alert_type, 0.0)
         return (now - last_time) >= self.alert_cooldown_seconds
 
@@ -208,6 +255,7 @@ class DriverTemporalTracker:
         self.current_yawn_duration = 0.0
         self.yawn_events_5min.clear()
         self.last_alert_times.clear()
+        self.continuous_drowsy_duration = 0.0
 
 
 class TemporalManager:
@@ -216,8 +264,27 @@ class TemporalManager:
     def __init__(self) -> None:
         self.trackers: Dict[str, DriverTemporalTracker] = {}
 
-    def get_tracker(self, driver_id: Optional[str] = None) -> DriverTemporalTracker:
+    def get_tracker(
+        self,
+        driver_id: Optional[str] = None,
+        ear_threshold: Optional[float] = None,
+        mar_threshold: Optional[float] = None,
+    ) -> DriverTemporalTracker:
         key = driver_id or "default_driver"
         if key not in self.trackers:
-            self.trackers[key] = DriverTemporalTracker()
+            tracker = DriverTemporalTracker()
+            if ear_threshold is not None:
+                tracker.ear_threshold = ear_threshold
+            if mar_threshold is not None:
+                tracker.mar_threshold = mar_threshold
+            self.trackers[key] = tracker
+        else:
+            if ear_threshold is not None:
+                self.trackers[key].ear_threshold = ear_threshold
+            if mar_threshold is not None:
+                self.trackers[key].mar_threshold = mar_threshold
         return self.trackers[key]
+
+
+# Global temporal manager singleton
+temporal_manager = TemporalManager()

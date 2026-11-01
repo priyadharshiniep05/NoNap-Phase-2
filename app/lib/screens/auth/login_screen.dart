@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
+
 import '../../providers/auth_provider.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/tokens.dart';
+import '../../theme/typography.dart';
+import '../../widgets/brand.dart';
 import '../../widgets/server_config_dialog.dart';
+import '../../widgets/ui.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -13,214 +19,209 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _emailController = TextEditingController(text: 'driver1@nonap.demo');
-  final _passwordController = TextEditingController(text: 'NoNap@123');
-  bool _obscurePassword = true;
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _obscure = true;
 
   @override
   void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
+    _email.dispose();
+    _password.dispose();
     super.dispose();
   }
 
-  void _fillCredentials(String email, String password) {
-    _emailController.text = email;
-    _passwordController.text = password;
+  Future<void> _login() async {
+    FocusScope.of(context).unfocus();
+    if (_email.text.trim().isEmpty || _password.text.isEmpty) {
+      showToast(context, 'Enter your email and password.', error: true);
+      return;
+    }
+    final ok = await ref.read(authProvider.notifier).login(_email.text, _password.text);
+    if (!ok && mounted) {
+      showToast(context, ref.read(authProvider).error ?? 'Sign in failed.', error: true);
+    }
   }
 
-  Future<void> _handleLogin() async {
-    final email = _emailController.text.trim();
-    final password = _passwordController.text;
-    if (email.isEmpty || password.isEmpty) return;
-
-    final success = await ref.read(authProvider.notifier).login(email, password);
-    if (!success && mounted) {
-      final error = ref.read(authProvider).error ?? 'Login failed';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: AppColors.drowsyRed, content: Text(error)),
-      );
-    }
+  void _fill(String email) {
+    _email.text = email;
+    _password.text = 'NoNap@123';
   }
 
   @override
   Widget build(BuildContext context) {
-    final authState = ref.watch(authProvider);
+    final auth = ref.watch(authProvider);
+    final api = ref.watch(apiServiceProvider);
+    final d = AppMotion.reduced(context) ? Duration.zero : 1.ms;
 
     return Scaffold(
-      appBar: AppBar(
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, color: AppColors.textSecondary),
-            tooltip: 'Configure Server IP',
-            onPressed: () => ServerConfigDialog.show(context),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Brand Icon
-                Center(
-                  child: Container(
-                    width: 90,
-                    height: 90,
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: AppColors.cyan.withValues(alpha: 0.5), width: 2),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.cyan.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    padding: const EdgeInsets.all(12),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: Image.asset(
-                        'assets/brand/nonap_icon_1024.png',
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => const Icon(
-                          Icons.remove_red_eye_rounded,
-                          color: AppColors.cyan,
-                          size: 40,
-                        ),
-                      ),
-                    ),
-                  ),
+      body: PageBackground(
+        child: SafeArea(
+          child: Column(children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(0, AppSpace.s, AppSpace.l, 0),
+                child: _ServerButton(
+                  label: api.hasServer ? api.baseUrl.replaceFirst(RegExp(r'^https?://'), '') : 'Set server',
+                  warn: !api.hasServer,
+                  onTap: () async {
+                    await ServerConfigDialog.show(context);
+                    setState(() {});
+                  },
                 ),
-                const SizedBox(height: 20),
-                const Text(
-                  'NoNap',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.textPrimary,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Real-Time Driver Drowsiness Detection',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.cyan,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 36),
-
-                // Email
-                TextField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Email Address',
-                    prefixIcon: Icon(Icons.email_outlined, color: AppColors.textSecondary),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Password
-                TextField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: const Icon(Icons.lock_outline, color: AppColors.textSecondary),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                        color: AppColors.textMuted,
-                      ),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Login Button
-                ElevatedButton(
-                  onPressed: authState.isLoading ? null : _handleLogin,
-                  child: authState.isLoading
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2.5),
-                        )
-                      : const Text('Sign In'),
-                ),
-                const SizedBox(height: 24),
-
-                // Quick Demo Accounts Fill
-                const Text(
-                  'QUICK DEMO LOGINS',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11,
-                    letterSpacing: 1.0,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textMuted,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.cyan,
-                          side: const BorderSide(color: AppColors.border),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        onPressed: () => _fillCredentials('driver1@nonap.demo', 'NoNap@123'),
-                        child: const Text('Driver Mode', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.blue,
-                          side: const BorderSide(color: AppColors.border),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        onPressed: () => _fillCredentials('manager@nonap.demo', 'NoNap@123'),
-                        child: const Text('Fleet Manager', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-
-                // Switch to Sign Up
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text("Don't have an account?", style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                    TextButton(
-                      onPressed: () => context.push('/signup'),
-                      child: const Text('Create Account', style: TextStyle(color: AppColors.cyan, fontWeight: FontWeight.bold, fontSize: 13)),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
-          ),
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    const Center(child: NoNapMark(size: 84, glow: true))
+                        .animate()
+                        .fadeIn(duration: d * 400)
+                        .scaleXY(begin: 0.9, end: 1, curve: AppMotion.curve, duration: d * 400),
+                    const SizedBox(height: AppSpace.l),
+                    const Center(child: NoNapWordmark(size: 34)),
+                    const SizedBox(height: AppSpace.xs),
+                    Text('Real-time driver drowsiness detection',
+                        textAlign: TextAlign.center, style: AppText.body(color: AppColors.textMuted)),
+                    const SizedBox(height: AppSpace.xxl),
+                    GlassCard(
+                      padding: const EdgeInsets.all(AppSpace.xl),
+                      child: AutofillGroup(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          Text('Sign in', style: AppText.title()),
+                          const SizedBox(height: AppSpace.l),
+                          TextField(
+                            controller: _email,
+                            keyboardType: TextInputType.emailAddress,
+                            autofillHints: const [AutofillHints.email],
+                            textInputAction: TextInputAction.next,
+                            style: AppText.body(color: AppColors.textPrimary),
+                            decoration: InputDecoration(labelText: 'Email', prefixIcon: Icon(PhosphorIconsRegular.envelopeSimple)),
+                          ),
+                          const SizedBox(height: AppSpace.m),
+                          TextField(
+                            controller: _password,
+                            obscureText: _obscure,
+                            autofillHints: const [AutofillHints.password],
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _login(),
+                            style: AppText.body(color: AppColors.textPrimary),
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              prefixIcon: Icon(PhosphorIconsRegular.lockSimple),
+                              suffixIcon: IconButton(
+                                tooltip: _obscure ? 'Show password' : 'Hide password',
+                                icon: Icon(_obscure ? PhosphorIconsRegular.eye : PhosphorIconsRegular.eyeSlash),
+                                onPressed: () => setState(() => _obscure = !_obscure),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: AppSpace.xl),
+                          GradientButton(
+                            label: 'Sign in',
+                            icon: PhosphorIconsBold.arrowRight,
+                            loading: auth.isLoading,
+                            onPressed: _login,
+                          ),
+                        ]),
+                      ),
+                    ).animate(delay: d * 120).fadeIn(duration: d * 400).slideY(begin: 0.06, end: 0, curve: AppMotion.curve),
+                    const SizedBox(height: AppSpace.xl),
+                    Text('DEMO ACCOUNTS', textAlign: TextAlign.center, style: AppText.overline()),
+                    const SizedBox(height: AppSpace.s),
+                    Row(children: [
+                      Expanded(
+                        child: _DemoChip(
+                          name: 'Priyadarshini',
+                          role: 'Driver',
+                          icon: PhosphorIconsRegular.steeringWheel,
+                          onTap: () => _fill('driver1@nonap.demo'),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpace.m),
+                      Expanded(
+                        child: _DemoChip(
+                          name: 'Ananya',
+                          role: 'Fleet manager',
+                          icon: PhosphorIconsRegular.truck,
+                          onTap: () => _fill('manager@nonap.demo'),
+                        ),
+                      ),
+                    ]),
+                    const SizedBox(height: AppSpace.l),
+                    Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Text('New to NoNap?', style: AppText.body(color: AppColors.textMuted)),
+                      TextButton(onPressed: () => context.push('/signup'), child: const Text('Create an account')),
+                    ]),
+                    const SizedBox(height: AppSpace.l),
+                  ]),
+                ),
+              ),
+            ),
+          ]),
         ),
       ),
+    );
+  }
+}
+
+class _ServerButton extends StatelessWidget {
+  final String label;
+  final bool warn;
+  final VoidCallback onTap;
+  const _ServerButton({required this.label, required this.warn, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = warn ? AppColors.warning : AppColors.textSecondary;
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        borderRadius: AppRadii.pillR,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: AppRadii.pillR,
+            border: Border.all(color: warn ? AppColors.warning.withValues(alpha: 0.5) : AppColors.border),
+            color: AppColors.surface.withValues(alpha: 0.5),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(PhosphorIconsRegular.broadcast, size: 15, color: color),
+            const SizedBox(width: 6),
+            Text(label, style: AppText.caption(color: color).copyWith(fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _DemoChip extends StatelessWidget {
+  final String name;
+  final String role;
+  final IconData icon;
+  final VoidCallback onTap;
+  const _DemoChip({required this.name, required this.role, required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      blur: false,
+      onTap: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.m, vertical: AppSpace.m),
+      child: Row(children: [
+        Icon(icon, size: 20, color: AppColors.primary),
+        const SizedBox(width: AppSpace.s),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: AppText.label(), overflow: TextOverflow.ellipsis),
+            Text(role, style: AppText.caption()),
+          ]),
+        ),
+      ]),
     );
   }
 }
